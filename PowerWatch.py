@@ -32,6 +32,8 @@ kWattHoursPerRev = 7.2
 kMinInsideTime = 1.0
 kWindowed = True
 kMinContourArea = 500
+kThreshold = 30
+kBlurSize = 25
 
 class Rect():
     def __init__(self, x, y, w, h):
@@ -66,12 +68,12 @@ class ImageProcessor():
     def Update(self, frameBgr):
         self.frameBgr  = frameBgr
         self.frameGray = cv2.cvtColor(self.frameBgr, cv2.COLOR_BGR2GRAY)
-        self.blurGray  = cv2.GaussianBlur(self.frameGray, (21, 21), 0)
+        self.blurGray  = cv2.GaussianBlur(self.frameGray, (kBlurSize, kBlurSize), 0)
         if self.lastBlurGray is None:
             self.lastBlurGray = self.blurGray
 
         self.deltaGray     = cv2.absdiff(self.lastBlurGray, self.blurGray)
-        self.thresholdGray = cv2.threshold(self.deltaGray, 30, 255, cv2.THRESH_BINARY)[1]
+        self.thresholdGray = cv2.threshold(self.deltaGray, kThreshold, 255, cv2.THRESH_BINARY)[1]
         self.dialatedGray  = cv2.dilate(self.thresholdGray, None, iterations=2)
 
         contours, _ = cv2.findContours(self.dialatedGray.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -137,6 +139,7 @@ def runPowerWatch():
 
         # Set up the image that will end up being displayed to screen
         images      = [processor.frameBgr, processor.frameGray, processor.blurGray, processor.deltaGray, processor.thresholdGray, processor.dialatedGray]
+        imageName   = ["Source", "Grayscale", "Blurred", "Delta", "Threshold", "Dialated"]
         imageCount  = len(images)
 
         display.update(images[displayIndex], displayIndex == 0)
