@@ -31,84 +31,139 @@ kWattHoursPerRev = 7.2
 # Config
 kMinInsideTime = 1.0
 kWindowed = True
+kMinContourArea = 500
 
-def lerp(a, b, t):
-    return cv2.addWeighted(a, 1-t, b, t, 0)
+class Rect():
+    def __init__(self, x, y, w, h):
+        self.x0 = x
+        self.y0 = y
+        self.x1 = self.x0 + w
+        self.y1 = self.y0 + h
 
-def overlap(aTL, aBR, bTL, bBR):
-    if aTL[0] > bBR[0]:
-        return False
-    if aTL[1] > bBR[1]:
-        return False
-    if aBR[0] < bTL[0]:
-        return False
-    if aBR[1] < bTL[1]:
-        return False
-    return True
+
+    def overlap(a, b):
+        if a.y0 > b.y1:
+            return False
+        if a.x0 > b.x1:
+            return False
+        if a.y1 < b.y0:
+            return False
+        if a.x1 < b.x0:
+            return False
+        return True
+
+
+class ImageProcessor():
+    def __init__(self):
+        self.lastBlurGray   = None
+        self.frameBgr       = None
+        self.frameGray      = None
+        self.blurGray       = None
+        self.deltaGray      = None
+        self.thresholdGray  = None
+        self.dialatedGray   = None
+
+    def Update(self, frameBgr):
+        self.frameBgr  = frameBgr
+        self.frameGray = cv2.cvtColor(self.frameBgr, cv2.COLOR_BGR2GRAY)
+        self.blurGray  = cv2.GaussianBlur(self.frameGray, (21, 21), 0)
+        if self.lastBlurGray is None:
+            self.lastBlurGray = self.blurGray
+
+        self.deltaGray     = cv2.absdiff(self.lastBlurGray, self.blurGray)
+        self.thresholdGray = cv2.threshold(self.deltaGray, 30, 255, cv2.THRESH_BINARY)[1]
+        self.dialatedGray  = cv2.dilate(self.thresholdGray, None, iterations=2)
+
+        contours, _ = cv2.findContours(self.dialatedGray.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        self.lastBlurGray = self.blurGray
+
+        return contours
+
+class Display():
+    def __init__(self, windowName = None):
+        self.windowName = windowName
+        self.image      = None
+        self.hasOverlay = False
+        if self.windowName:
+            cv2.namedWindow(self.windowName)
+
+    def __del__(self):
+        if self.windowName:
+            cv2.destroyWindow(self.windowName)
+
+    def update(self, image, hasOverlay):
+        self.image      = image
+        self.hasOverlay = hasOverlay
+
+    def rectangle(self, rect, color):
+        if self.hasOverlay:
+            cv2.rectangle(self.image, (rect.x0, rect.y0), (rect.x1, rect.y1), color, 2)
+
+    def text(self, text, pos, color):
+        if self.hasOverlay:
+            cv2.putText(self.image, text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+    def present(self):
+        if self.windowName:
+            cv2.imshow(self.windowName, self.image)
+
+    @property
+    def width(self):
+        return self.image.shape[1]
+
+    @property
+    def height(self):
+        return self.image.shape[0]
+
+
 
 def runPowerWatch():
-    if kWindowed:
-        cv2.namedWindow("preview")
-    cap = cv2.VideoCapture(0)
+    display = Display("Power Watch" if kWindowed else None)
+    caputre = cv2.VideoCapture(0)
 
     state = kStateInit
     lastInsideTime = time.clock()
-    lastKnownPower = None
+    lastKnownPower = 0
     lastTriggerTime = None
-    lastGray = None
     displayIndex = 0
-    while cap.isOpened():
-        success, frameBgr = cap.read()
+
+    processor = ImageProcessor();
+    while caputre.isOpened():
+        success, frameBgr = caputre.read()
         if not success:
             break
 
-        # Process the frame to obtain contours
-        currGray = cv2.cvtColor(frameBgr, cv2.COLOR_BGR2GRAY)
-        currGray = cv2.GaussianBlur(currGray, (21, 21), 0)
-        if lastGray is None:
-            lastGray = currGray
-
-        deltaGray    = cv2.absdiff(lastGray, currGray)
-        threshGray   = cv2.threshold(deltaGray, 30, 255, cv2.THRESH_BINARY)[1]
-        dialatedGray = cv2.dilate(threshGray, None, iterations=2)
-
-        contours, _ = cv2.findContours(dialatedGray.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        lastGray = currGray
-
+        contours = processor.Update(frameBgr)
 
         # Set up the image that will end up being displayed to screen
-        images      = [frameBgr, currGray, deltaGray, threshGray, dialatedGray]
+        images      = [processor.frameBgr, processor.frameGray, processor.blurGray, processor.deltaGray, processor.thresholdGray, processor.dialatedGray]
         imageCount  = len(images)
-        display     = images[displayIndex]
-        showOverlay = display is frameBgr
+
+        display.update(images[displayIndex], displayIndex == 0)
+
 
         # compute trigger window
-        screenH, screenW     = display.shape[0], display.shape[1]
-        triggerW, triggerH   = screenW  * 1 // 3, screenH * 1 // 4
-        triggerX0, triggerY0 = screenW * 1 // 3, screenH * 2 // 4
-        triggerX1, triggerY1 = triggerX0 + triggerW, triggerY0 + triggerH
-        triggerTL            = (triggerY0, triggerX0)
-        triggerBR            = (triggerY1, triggerX1)
+        triggerRect = Rect(
+            display.width  * 1 // 3, # x
+            display.height * 2 // 4, # y
+            display.width  * 1 // 3, # w
+            display.height * 1 // 4  # h
+        )
 
 
         # Determine if any of the contours overlap the trigger window
         triggered = False
         for contour in contours:
-            if cv2.contourArea(contour) < 500:
+            if cv2.contourArea(contour) < kMinContourArea:
                 continue
-            contourX0, contourY0, contourW, contourH = cv2.boundingRect(contour)
-            contourX1, contourY1 = contourX0 + contourW, contourY0 + contourH
-            contourTL = (contourY0, contourX0)
-            contourBR = (contourY1, contourX1)
+            contourRect = Rect(*cv2.boundingRect(contour))
 
-            if showOverlay:
-                cv2.rectangle(display, (contourX0, contourY0), (contourX1, contourY1), kGreen, 2)
+            display.rectangle(contourRect, kGreen)
 
-            if not triggered and overlap(triggerTL, triggerBR, contourTL, contourBR):
+            if Rect.overlap(triggerRect, contourRect):
                 triggered = True
-        if showOverlay:
-            cv2.rectangle(display, (triggerX0, triggerY0), (triggerX1, triggerY1), kRed if triggered else kBlue, 2)
 
+        display.rectangle(triggerRect, kRed if triggered else kBlue)
 
         # Process the state machine
         currTime = time.clock()
@@ -132,14 +187,12 @@ def runPowerWatch():
 
 
         # Print the current state
-        if showOverlay:
-            stateValue = "Init" if state == kStateInit else "In" if state == kStateIn else "Out"
-            text = "State: {} | Power Usage: {} Watts".format(stateValue, lastKnownPower)
-            cv2.putText(display, text, (10, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, kRed, 2)
+        stateValue = "Init" if state == kStateInit else "In" if state == kStateIn else "Out"
+        text = "State: {} | Power Usage: {} Watts".format(stateValue, lastKnownPower)
+        display.text(text, (15, 15), kRed)
 
         # Display the image
-        if kWindowed:
-            cv2.imshow("preview", display)
+        display.present()
 
         # Process key press
         key = cv2.waitKey(20)
@@ -150,10 +203,6 @@ def runPowerWatch():
         elif key == kKeyDown:
             displayIndex = (displayIndex + 1) % imageCount
         
-    cap.release()
-    if kWindowed:
-        cv2.destroyWindow("preview")
-
-
+    caputre.release()
 
 runPowerWatch()
