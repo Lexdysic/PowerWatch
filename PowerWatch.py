@@ -30,6 +30,7 @@ kWattHoursPerRev = 7.2
 
 # Config
 kMinInsideTime = 1.0
+kWindowed = True
 
 def lerp(a, b, t):
     return cv2.addWeighted(a, 1-t, b, t, 0)
@@ -46,7 +47,8 @@ def overlap(aTL, aBR, bTL, bBR):
     return True
 
 def runPowerWatch():
-    cv2.namedWindow("preview")
+    if kWindowed:
+        cv2.namedWindow("preview")
     cap = cv2.VideoCapture(0)
 
     state = kStateInit
@@ -125,6 +127,7 @@ def runPowerWatch():
                 if lastTriggerTime:
                     secondsPerRev = currTriggerTime - lastTriggerTime
                     lastKnownPower = kWattHoursPerRev * kSecondsPerHour / secondsPerRev
+                    print("Triggered Power = {}".format(lastKnownPower))
                 lastTriggerTime = currTriggerTime
 
 
@@ -135,7 +138,8 @@ def runPowerWatch():
             cv2.putText(display, text, (10, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, kRed, 2)
 
         # Display the image
-        cv2.imshow("preview", display)
+        if kWindowed:
+            cv2.imshow("preview", display)
 
         # Process key press
         key = cv2.waitKey(20)
@@ -147,7 +151,8 @@ def runPowerWatch():
             displayIndex = (displayIndex + 1) % imageCount
         
     cap.release()
-    cv2.destroyWindow("preview")
+    if kWindowed:
+        cv2.destroyWindow("preview")
 
 
 
